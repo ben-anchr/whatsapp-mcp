@@ -15,10 +15,16 @@ ALLOWLIST_PY := $(MCP_DIR)/allowlist.py
 # snippet that sources .env if it exists.
 RUN_WITH_ENV := set -a; [ -f ../.env ] && . ../.env; set +a;
 
-# Match the foreground `go run` AND any compiled binary verygoodplugins
-# produces (`whatsapp-bridge` or `whatsapp-client`). Used by kill /
-# restart / doctor targets.
-BRIDGE_PGREP := pgrep -f '(go run \.|whatsapp-bridge/whatsapp-bridge|whatsapp-bridge/whatsapp-client|go-build.*exe/main)'
+# Match any bridge binary by its name `whatsapp-client` — covers both
+# `go run .` (which compiles to a temp exe of that name) and any
+# `make build` binary at whatsapp-bridge/whatsapp-client, no matter where
+# Go's build cache stashed it (~/Library/Caches/go-build/..., /var/folders/...,
+# etc.). The [w] bracket trick is the classic pgrep self-match dodge:
+# the regex matches literal "whatsapp-client", but pgrep's OWN argv
+# contains the literal "[w]hatsapp-client" (brackets included) which the
+# regex won't match. Avoids the kind of orphan pileup that triggered a
+# stream-replaced ping-pong during the vgp rebase.
+BRIDGE_PGREP := pgrep -f '[w]hatsapp-client'
 
 .PHONY: help bridge kill-bridge restart-bridge build update-deps \
         reset-pairing doctor \
