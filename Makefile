@@ -9,6 +9,12 @@ MCP_DIR := whatsapp-mcp-server
 ALLOWLIST_FILE := chat-allowlist.txt
 ALLOWLIST_PY := $(MCP_DIR)/allowlist.py
 
+# Auto-source .env for bridge subprocesses so $WHATSAPP_BRIDGE_PORT (and
+# anything else in there) flows into `go run`. vgp's main.go reads the
+# OS env but doesn't load .env itself. Wrap the run command with a shell
+# snippet that sources .env if it exists.
+RUN_WITH_ENV := set -a; [ -f ../.env ] && . ../.env; set +a;
+
 # Match the foreground `go run` AND any compiled binary verygoodplugins
 # produces (`whatsapp-bridge` or `whatsapp-client`). Used by kill /
 # restart / doctor targets.
@@ -36,7 +42,7 @@ help:
 	@echo "  make allowlist-cleanup-dry   preview what cleanup would delete"
 
 bridge:
-	cd $(BRIDGE_DIR) && go run .
+	cd $(BRIDGE_DIR) && $(RUN_WITH_ENV) go run .
 
 kill-bridge:
 	@pids="$$($(BRIDGE_PGREP) 2>/dev/null | tr '\n' ' ')"; \
