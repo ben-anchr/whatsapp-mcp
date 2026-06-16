@@ -139,7 +139,8 @@ at the repo root and that the bridge log on startup says
 | File | Change |
 |---|---|
 | `whatsapp-bridge/allowlist.go` | **New.** Loads `chat-allowlist.txt` and resolves names → JIDs. |
-| `whatsapp-bridge/main.go` | `MessageStore` grows an `allowlist` field + `SetAllowlist`; `StoreMessage` short-circuits when the chat isn't allowed; `main()` calls `LoadAllowlist` post-init. |
+| `whatsapp-bridge/seed.go` | **New.** On every `*events.Connected`, fetches `GetGroupInfo` for any allowlist `@g.us` JID missing from the `chats` table and inserts a row. Closes the cold-cache gap where WhatsApp's history sync doesn't ship groups with no recent traffic, so `make allowlist` reports the real name immediately instead of `UNRESOLVED`. |
+| `whatsapp-bridge/main.go` | `MessageStore` grows an `allowlist` field + `SetAllowlist`; `StoreMessage` short-circuits when the chat isn't allowed; `main()` calls `LoadAllowlist` post-init; `*events.Connected` handler triggers `SeedAllowlistGroups` in a goroutine. |
 | `whatsapp-mcp-server/allowlist.py` | **New.** Mirrors the Go loader; also exposes `ChatNotAllowed` and `enforce()`. |
 | `whatsapp-mcp-server/main.py` | Imports for `send_*` removed. Four `@mcp.tool()` registrations (`send_message`, `send_reaction`, `send_file`, `send_audio_message`) deleted. `enforce()` / allowlist filter calls added to every read tool that exposes chat content. |
 | `chat-allowlist.example.txt` | **New.** Schema + safe placeholders. |
@@ -218,10 +219,21 @@ isn't online to re-upload. Open the chat on phone briefly and retry.
 
 ### `make allowlist` lists a name as `UNRESOLVED`
 
-Either the bridge hasn't seen a message in that chat yet (cold cache —
-send one message there or wait for sync), or the name in your file
-doesn't match the name in `chats.name` exactly (Unicode apostrophes are a
-classic foot-gun). Prefer JID entries for stability.
+For **group** entries (`@g.us`): shouldn't happen after the bridge has
+connected once — `SeedAllowlistGroups` (`whatsapp-bridge/seed.go`) fires
+on every `*events.Connected` and proactively populates the `chats` row
+via `GetGroupInfo`. If you see UNRESOLVED, check the bridge log around
+startup for a `seed:` line — `GetGroupInfo` might have failed (wrong
+JID? group you've been removed from?) and there'll be a clear error.
+
+For **direct chat** entries (`@s.whatsapp.net`): no proactive seed; the
+row is created when the first message in either direction is observed.
+Send one message and `make allowlist` will pick it up.
+
+If the name in your file doesn't match the name in `chats.name` exactly
+(Unicode apostrophes are a classic foot-gun), `make allowlist-resolve
+NAME='…'` falls back to a fuzzy `LIKE` lookup so you can see the actual
+stored name. Prefer JID entries for stability.
 
 ---
 

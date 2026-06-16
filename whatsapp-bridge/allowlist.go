@@ -156,3 +156,24 @@ func (al *Allowlist) IsAllowed(jid, name string) bool {
 	}
 	return false
 }
+
+// AllowedGroupJIDs returns the @g.us JIDs currently in the allowlist.
+// Used by the bridge at startup to proactively seed missing chats table
+// rows for cold-cache groups (chats with no recent activity that didn't
+// arrive via WhatsApp's history sync). Direct chats (@s.whatsapp.net)
+// are intentionally excluded — they typically resolve from contact sync,
+// not from groupInfo. Returns nil when the allowlist is disabled.
+func (al *Allowlist) AllowedGroupJIDs() []string {
+	if !al.enabled {
+		return nil
+	}
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	out := make([]string, 0, len(al.allowedJIDs))
+	for jid := range al.allowedJIDs {
+		if strings.HasSuffix(jid, "@g.us") {
+			out = append(out, jid)
+		}
+	}
+	return out
+}

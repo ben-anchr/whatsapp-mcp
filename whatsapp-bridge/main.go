@@ -2339,6 +2339,11 @@ func main() {
 
 		case *events.Connected:
 			logger.Infof("✓ Successfully connected to WhatsApp servers")
+			// Anchr fork: seed chats rows for allowlist groups that
+			// WhatsApp's history sync didn't deliver (cold groups). Runs
+			// in a goroutine so GetGroupInfo round-trips don't block the
+			// event handler. Idempotent — re-fires on every reconnect.
+			go messageStore.SeedAllowlistGroups(context.Background(), client, waLog.Stdout("AllowlistSeed", "INFO", true))
 
 		case *events.LoggedOut:
 			logger.Warnf("⚠️  Device logged out, please scan QR code to log in again")
