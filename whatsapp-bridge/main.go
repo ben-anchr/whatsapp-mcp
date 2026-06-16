@@ -75,7 +75,17 @@ type Message struct {
 
 // Database handler for storing message history
 type MessageStore struct {
-	db *sql.DB
+	db        *sql.DB
+	allowlist *Allowlist // Anchr fork: nil-safe; nil means allow-all
+}
+
+// SetAllowlist wires up the chat allowlist on this store. Anchr fork.
+// Must be called after NewMessageStore and before any message handling.
+// Pass nil to leave allow-all behavior in place (e.g. when
+// chat-allowlist.txt is absent — LoadAllowlist already returns a
+// disabled instance in that case).
+func (store *MessageStore) SetAllowlist(al *Allowlist) {
+	store.allowlist = al
 }
 
 type ChatEphemeralSettings struct {
@@ -622,6 +632,19 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 	// Only store if there's actual content or media
 	if content == "" && mediaType == "" {
 		return nil
+	}
+
+	// Anchr fork: belt-and-suspenders allowlist enforcement at the bridge
+	// level. Look up the chat's name (populated by the StoreChat call that
+	// precedes every StoreMessage call site) and check the allowlist.
+	// If disallowed, drop the message silently — nothing about it ever
+	// lands in messages.db.
+	if store.allowlist != nil && store.allowlist.enabled {
+		var name sql.NullString
+		_ = store.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chatJID).Scan(&name)
+		if !store.allowlist.IsAllowed(chatJID, name.String) {
+			return nil
+		}
 	}
 
 	// Store empty quoted_message_id as SQL NULL so the column is null for
@@ -2234,6 +2257,12 @@ func main() {
 		return
 	}
 	defer func() { _ = messageStore.Close() }()
+
+	// Anchr fork: load chat allowlist and wire it onto the store before any
+	// message handlers are registered. When ../chat-allowlist.txt is absent
+	// this returns a disabled allowlist (allow-all) so behavior matches
+	// upstream (verygoodplugins/whatsapp-mcp).
+	messageStore.SetAllowlist(LoadAllowlist(messageStore.db, waLog.Stdout("Allowlist", "INFO", true)))
 
 	if err := messageStore.MigrateLegacyLIDChatsToPhoneJIDs("store/whatsapp.db", logger); err != nil {
 		logger.Errorf("Failed to migrate legacy LID chat rows: %v", err)

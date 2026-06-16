@@ -37,18 +37,28 @@ from whatsapp import (
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
 )
-from whatsapp import (
-    send_audio_message as whatsapp_audio_voice_message,
-)
-from whatsapp import (
-    send_file as whatsapp_send_file,
-)
-from whatsapp import (
-    send_message as whatsapp_send_message,
-)
-from whatsapp import (
-    send_reaction as whatsapp_send_reaction,
-)
+# Anchr fork: send_audio_message / send_file / send_message / send_reaction
+# imports + their @mcp.tool() registrations have been removed deliberately
+# to close the "lethal trifecta" — untrusted message content + agent read
+# access + an agent-controlled outbound WhatsApp channel is a prompt-
+# injection-to-exfil attack surface. See ANCHR.md. If you ever merge
+# from upstream verygoodplugins/main and they reappear, strip them again.
+
+# Anchr fork: chat allowlist (belt-and-suspenders with the bridge's
+# allowlist.go). See chat-allowlist.example.txt and ANCHR.md.
+from allowlist import ALLOWLIST, ChatNotAllowed, enforce  # noqa: F401  (re-export for handlers)
+
+
+def _chat_jid(obj):
+    """Extract a chat JID from a Chat dataclass, dict, or None."""
+    if obj is None:
+        return None
+    if hasattr(obj, "jid"):
+        return obj.jid
+    if isinstance(obj, dict):
+        return obj.get("jid")
+    return None
+
 
 # Initialize FastMCP server
 mcp = FastMCP("whatsapp")
@@ -189,6 +199,14 @@ def list_messages(
     """
     # Cap limit at 500 to prevent excessive queries
     limit = min(limit, 500)
+
+    # Anchr fork: if caller passed a specific chat_jid, it must be allowed.
+    # If they didn't, we let whatsapp_list_messages run unfiltered (so it
+    # can still page across all messages) and post-filter the results by
+    # chat_jid against the allowlist before returning.
+    if chat_jid is not None:
+        enforce(chat_jid)
+
     messages = whatsapp_list_messages(
         after=after,
         before=before,
@@ -202,6 +220,8 @@ def list_messages(
         context_after=context_after,
         sort_by=sort_by,
     )
+    if ALLOWLIST.enabled and chat_jid is None:
+        messages = [m for m in messages if ALLOWLIST.is_allowed(m.get("chat_jid"))]
     return messages
 
 
@@ -227,6 +247,8 @@ def list_chats(
     chats = whatsapp_list_chats(
         query=query, limit=limit, page=page, include_last_message=include_last_message, sort_by=sort_by
     )
+    if ALLOWLIST.enabled:
+        chats = [c for c in chats if ALLOWLIST.is_allowed(_chat_jid(c))]
     return chats
 
 
@@ -238,6 +260,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> dict[str, Any]
         chat_jid: The JID of the chat to retrieve
         include_last_message: Whether to include the last message (default True)
     """
+    enforce(chat_jid)
     chat = whatsapp_get_chat(chat_jid, include_last_message)
     return chat
 
@@ -250,6 +273,8 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> dict[str, Any]:
         sender_phone_number: The phone number to search for
     """
     chat = whatsapp_get_direct_chat_by_contact(sender_phone_number)
+    if ALLOWLIST.enabled and not ALLOWLIST.is_allowed(_chat_jid(chat)):
+        return {}
     return chat
 
 
@@ -263,6 +288,8 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> list[dict[str
         page: Page number for pagination (default 0)
     """
     chats = whatsapp_get_contact_chats(jid, limit, page)
+    if ALLOWLIST.enabled:
+        chats = [c for c in chats if ALLOWLIST.is_allowed(_chat_jid(c))]
     return chats
 
 
@@ -297,99 +324,9 @@ def get_message_context(message_id: str, before: int = 5, after: int = 5) -> dic
     }
 
 
-@mcp.tool()
-def send_message(
-    recipient: str,
-    message: str,
-    quoted_message_id: str = "",
-    quoted_sender_jid: str = "",
-    quoted_content: str = "",
-) -> dict[str, Any]:
-    """Send a WhatsApp message to a person or group. For group chats use the JID.
-
-    Args:
-        recipient: The recipient - either a phone number with country code but no + or other symbols,
-                 or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
-        message: The message text to send
-        quoted_message_id: ID of the message to reply to (optional). When set, the sent
-                           message will appear as a quoted reply in WhatsApp.
-        quoted_sender_jid: Full JID of the author of the quoted message. Required for
-                           group replies so WhatsApp renders the correct attribution.
-        quoted_content: Text content of the quoted message, used for the reply preview.
-                        Only plain text is supported; media previews are not included.
-
-    Returns:
-        A dictionary containing success status and a status message
-    """
-    # Validate input
-    if not recipient:
-        return {"success": False, "message": "Recipient must be provided"}
-
-    # Call the whatsapp_send_message function with the unified recipient parameter
-    success, status_message = whatsapp_send_message(
-        recipient, message, quoted_message_id, quoted_sender_jid, quoted_content
-    )
-    return {"success": success, "message": status_message}
-
-
-@mcp.tool()
-def send_reaction(
-    recipient: str,
-    message_id: str,
-    emoji: str,
-    from_me: bool = False,
-    sender_jid: str = "",
-) -> dict[str, Any]:
-    """Send (or remove) a reaction to a WhatsApp message.
-
-    Args:
-        recipient: The chat JID the message belongs to (e.g., "12025551234@s.whatsapp.net"
-                   or a group JID like "123456789@g.us")
-        message_id: The ID of the message to react to
-        emoji: The reaction emoji (e.g., "👍"). Pass an empty string to remove the reaction.
-        from_me: Whether the original message was sent by the current user (default False)
-        sender_jid: JID of the original message sender — required for group messages when
-                    from_me is False so the bridge can build the correct WhatsApp key
-
-    Returns:
-        A dictionary containing success status and a status message
-    """
-    success, status_message = whatsapp_send_reaction(recipient, message_id, emoji, from_me, sender_jid)
-    return {"success": success, "message": status_message}
-
-
-@mcp.tool()
-def send_file(recipient: str, media_path: str) -> dict[str, Any]:
-    """Send a file such as a picture, raw audio, video or document via WhatsApp to the specified recipient. For group messages use the JID.
-
-    Args:
-        recipient: The recipient - either a phone number with country code but no + or other symbols,
-                 or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
-        media_path: The absolute path to the media file to send (image, video, document)
-
-    Returns:
-        A dictionary containing success status and a status message
-    """
-
-    # Call the whatsapp_send_file function
-    success, status_message = whatsapp_send_file(recipient, media_path)
-    return {"success": success, "message": status_message}
-
-
-@mcp.tool()
-def send_audio_message(recipient: str, media_path: str) -> dict[str, Any]:
-    """Send any audio file as a WhatsApp audio message to the specified recipient. For group messages use the JID. If it errors due to ffmpeg not being installed, use send_file instead.
-
-    Args:
-        recipient: The recipient - either a phone number with country code but no + or other symbols,
-                 or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
-        media_path: The absolute path to the audio file to send (will be converted to Opus .ogg if it's not a .ogg file)
-
-    Returns:
-        A dictionary containing success status and a status message
-    """
-    success, status_message = whatsapp_audio_voice_message(recipient, media_path)
-    return {"success": success, "message": status_message}
+# Anchr fork: send_message / send_reaction / send_file / send_audio_message
+# @mcp.tool() registrations removed deliberately — see comment near the
+# top of this file and ANCHR.md. Read-only tool surface only.
 
 
 @mcp.tool()
@@ -403,6 +340,7 @@ def download_media(message_id: str, chat_jid: str) -> dict[str, Any]:
     Returns:
         A dictionary containing success status, a status message, and the file path if successful
     """
+    enforce(chat_jid)
     file_path = whatsapp_download_media(message_id, chat_jid)
 
     if file_path:

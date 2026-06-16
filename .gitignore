@@ -48,6 +48,11 @@ build/
 .env
 .env.local
 
+# Anchr fork: real chat allowlist (chats and JIDs are sensitive — leak of
+# this file would reveal which WhatsApp groups/contacts the agent reads).
+# The .example version is checked in as a template.
+chat-allowlist.txt
+
 # Testing
 .pytest_cache/
 .coverage

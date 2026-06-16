@@ -1,0 +1,28 @@
+# Anchr WhatsApp MCP — chat allowlist.
+#
+# One entry per line. Each entry is either:
+#   * A chat name (matched case-insensitively against the chats.name column
+#     the Go bridge populates). Convenient but mutable — a chat rename
+#     breaks the match until you update this file.
+#   * A JID (anything containing '@'). Stable across renames; preferred
+#     for production use. JIDs look like:
+#       - 120363xxxxxxxxxxx@g.us         ← group
+#       - 1xxxxxxxxxx@s.whatsapp.net     ← direct chat (US-style E.164)
+# Blank lines and lines starting with '#' are ignored.
+#
+# Enforced at BOTH layers:
+#   * Go bridge: messages from disallowed chats are dropped before being
+#     written to whatsapp-bridge/store/messages.db. Belt.
+#   * Python MCP server: all read tools filter responses to allowed chats
+#     and refuse direct lookups against disallowed JIDs. Suspenders.
+#
+# When chat-allowlist.txt (without the .example suffix) does not exist,
+# BOTH layers fall back to "allow everything" and log a loud warning at
+# startup. Don't ship that to an agent you don't fully control — see ANCHR.md
+# for the "lethal trifecta" rationale.
+
+# Examples — uncomment, edit for your setup, and save as chat-allowlist.txt:
+#
+# Engineering Standup
+# 120363999999999999@g.us
+# 19295551234@s.whatsapp.net
