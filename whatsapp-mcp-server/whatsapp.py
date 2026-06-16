@@ -10,6 +10,41 @@ import requests
 
 import audio
 
+
+def _load_dotenv() -> None:
+    """Anchr fork: hand-rolled .env loader for the bridge URL / token.
+
+    Cursor launches the MCP server via `uv --directory ... run main.py`,
+    so the subprocess inherits Cursor's environment — NOT our workspace
+    .env. Without this, WHATSAPP_API_URL defaults to localhost:8080
+    (vgp's upstream default), which collides with the Casper dev server
+    and routes /api/download to the wrong process. We avoid taking a
+    python-dotenv dep here to keep this module importable from minimal
+    venvs; the file format is trivial enough.
+    """
+    env_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", ".env"
+    )
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path) as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        # Best-effort; never fail import on a malformed .env.
+        return
+
+
+_load_dotenv()
+
 # Configuration via environment variables with sensible defaults
 MESSAGES_DB_PATH = os.getenv(
     "WHATSAPP_DB_PATH",
@@ -19,7 +54,17 @@ WHATSMEOW_DB_PATH = os.getenv(
     "WHATSMEOW_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "whatsapp-bridge", "store", "whatsapp.db"),
 )
-WHATSAPP_API_BASE_URL = os.getenv("WHATSAPP_API_URL", "http://localhost:8080/api")
+
+# Anchr fork: derive the bridge URL from WHATSAPP_BRIDGE_PORT when set
+# (single source of truth — same env var the Go bridge reads), but still
+# honor an explicit WHATSAPP_API_URL override if someone wants to point
+# the MCP at a bridge on another host or path.
+_explicit_api_url = os.getenv("WHATSAPP_API_URL")
+if _explicit_api_url:
+    WHATSAPP_API_BASE_URL = _explicit_api_url
+else:
+    _bridge_port = os.getenv("WHATSAPP_BRIDGE_PORT", "8080").strip() or "8080"
+    WHATSAPP_API_BASE_URL = f"http://localhost:{_bridge_port}/api"
 
 _BRIDGE_TOKEN_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "whatsapp-bridge", "store", ".bridge-token"

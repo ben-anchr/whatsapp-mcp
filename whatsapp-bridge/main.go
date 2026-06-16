@@ -1827,9 +1827,36 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		MediaType:     waMediaType,
 	}
 
-	// Download the media using whatsmeow client
+	// Download the media using whatsmeow client.
 	mediaData, err := client.Download(context.Background(), downloader)
-	if err != nil {
+
+	// Anchr fork: if WhatsApp's CDN returned 403/404/410, the signed URL
+	// expired (older media) or this device never received the keys for
+	// this media (history sync without retry). Ask the sender's phone
+	// to silently re-upload via SendMediaRetryReceipt, update the
+	// descriptor with the new directPath, and try once more.
+	if err != nil && shouldRetryDownloadErr(err) {
+		retryLogger := waLog.Stdout("MediaRetry", "INFO", true)
+		retryLogger.Infof("download for %s returned %v — issuing media retry receipt", messageID, err)
+		newDirectPath, retryErr := requestMediaRetry(context.Background(), client, messageStore, messageID, chatJID, retryLogger)
+		if retryErr != nil {
+			return false, "", "", "", fmt.Errorf("download failed (%v) and retry receipt failed: %w", err, retryErr)
+		}
+		// Persist the new URL/directPath back onto the messages row so
+		// repeated downloads of the same media don't re-trigger the
+		// retry handshake unnecessarily.
+		newURL := rebuildMediaURL(newDirectPath)
+		if storeErr := messageStore.StoreMediaInfo(messageID, chatJID, newURL, mediaKey, fileSHA256, fileEncSHA256, fileLength); storeErr != nil {
+			retryLogger.Warnf("failed to persist refreshed media descriptor for %s: %v", messageID, storeErr)
+		}
+		downloader.URL = newURL
+		downloader.DirectPath = newDirectPath
+		mediaData, err = client.Download(context.Background(), downloader)
+		if err != nil {
+			return false, "", "", "", fmt.Errorf("download failed after media retry: %w", err)
+		}
+		retryLogger.Infof("media-retry: download succeeded after re-upload for message %s (%d bytes)", messageID, len(mediaData))
+	} else if err != nil {
 		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
 	}
 
@@ -2344,6 +2371,12 @@ func main() {
 			// in a goroutine so GetGroupInfo round-trips don't block the
 			// event handler. Idempotent — re-fires on every reconnect.
 			go messageStore.SeedAllowlistGroups(context.Background(), client, waLog.Stdout("AllowlistSeed", "INFO", true))
+
+		case *events.MediaRetry:
+			// Anchr fork: route the phone's response to the waiting
+			// download-media call that issued the corresponding retry
+			// receipt. See media_retry.go.
+			mediaRetryRegistry.Deliver(v)
 
 		case *events.LoggedOut:
 			logger.Warnf("⚠️  Device logged out, please scan QR code to log in again")
